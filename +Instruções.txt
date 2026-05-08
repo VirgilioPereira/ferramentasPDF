@@ -1,0 +1,46 @@
+Tesseract ORC
+  
+---
+  1. Baixar o instalador
+
+  Acesse: github.com/UB-Mannheim/tesseract/wiki
+
+  Esse é o build oficial para Windows (mantido pela Universidade de Mannheim). Baixe o arquivo
+  tesseract-ocr-w64-setup-5.x.x.exe (versão 64-bit).
+
+  ---
+  2. Instalar
+
+  Durante a instalação, na tela "Choose Components":
+  - Marque Additional language data → expanda e marque Portuguese
+
+  O caminho padrão de instalação será:
+  C:\Program Files\Tesseract-OCR\
+
+  ---
+  3. Adicionar ao PATH do Windows
+
+  1. Abra Configurações do Windows → pesquise "Variáveis de ambiente"
+  2. Em Variáveis do sistema, selecione Path → Editar
+  3. Clique em Novo e adicione:
+  C:\Program Files\Tesseract-OCR
+  4. Clique OK em tudo e reinicie o terminal
+
+  ---
+  4. Verificar a instalação
+
+  No terminal:
+  tesseract --version
+  tesseract --list-langs
+
+  O segundo comando deve mostrar por na lista.
+
+  ---
+  5. Instalar o pytesseract
+
+  .venv\Scripts\activate
+  pip install pytesseract
+
+  ---
+  Depois disso é só rodar a aplicação normalmente. Se o Tesseract estiver no PATH, o pytesseract vai encontrá-lo
+  automaticamente. Me diga se travar em algum passo.
