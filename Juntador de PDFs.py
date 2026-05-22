@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox, ttk
 import os
 import io
 import sys
+import shutil
 from PyPDF2 import PdfMerger
 import threading
 from PIL import Image, ImageTk
@@ -38,6 +39,11 @@ class PDFMergerApp:
         self.ocr_arquivo_entrada = tk.StringVar()
         self.ocr_arquivo_saida = tk.StringVar()
 
+        # Variáveis - Comprimir PDF
+        self.compress_arquivo_entrada = tk.StringVar()
+        self.compress_arquivo_saida = tk.StringVar()
+        self.compress_nivel = tk.StringVar(value="media")
+
         self.configurar_estilo()
         self.criar_interface()
 
@@ -70,6 +76,7 @@ class PDFMergerApp:
 
         self.criar_aba_juntar()
         self.criar_aba_ocr()
+        self.criar_aba_comprimir()
 
     # ── Aba: Juntar PDFs ────────────────────────────────────────────────────
 
@@ -335,6 +342,173 @@ class PDFMergerApp:
         finally:
             self._ocr_atualizar_botao()
             self.ocr_progress.config(value=0)
+
+    # ── Aba: Comprimir PDF ──────────────────────────────────────────────────
+
+    def criar_aba_comprimir(self):
+        aba = ttk.Frame(self.notebook, padding="20")
+        self.notebook.add(aba, text="🗜️ Comprimir PDF")
+
+        aba.columnconfigure(1, weight=1)
+
+        ttk.Label(aba, text="🗜️ Comprimir PDF", style='Title.TLabel').grid(
+            row=0, column=0, columnspan=3, pady=(0, 20))
+
+        ttk.Label(aba, text="📄 PDF de entrada:", style='Heading.TLabel').grid(
+            row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(aba, textvariable=self.compress_arquivo_entrada, state="readonly", width=50).grid(
+            row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ttk.Button(aba, text="Procurar", command=self.compress_selecionar_entrada).grid(
+            row=1, column=2, pady=5)
+
+        ttk.Label(aba, text="💾 Salvar como:", style='Heading.TLabel').grid(
+            row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(aba, textvariable=self.compress_arquivo_saida, state="readonly", width=50).grid(
+            row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ttk.Button(aba, text="Procurar", command=self.compress_selecionar_saida).grid(
+            row=2, column=2, pady=5)
+
+        nivel_frame = ttk.LabelFrame(aba, text="Nível de compressão", padding="10")
+        nivel_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(15, 5))
+
+        ttk.Radiobutton(nivel_frame, text="Baixa  (maior qualidade — DPI 200, qualidade 85%)",
+                        variable=self.compress_nivel, value="baixa").grid(
+            row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Radiobutton(nivel_frame, text="Média  (equilibrado — DPI 150, qualidade 70%)",
+                        variable=self.compress_nivel, value="media").grid(
+            row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Radiobutton(nivel_frame, text="Alta   (menor arquivo — DPI 100, qualidade 50%)",
+                        variable=self.compress_nivel, value="alta").grid(
+            row=2, column=0, sticky=tk.W, pady=2)
+
+        self.compress_progress = ttk.Progressbar(aba, mode='determinate')
+        self.compress_progress.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+
+        self.compress_status_label = ttk.Label(aba, text="Selecione um PDF para comprimir")
+        self.compress_status_label.grid(row=5, column=0, columnspan=3, pady=5)
+
+        self.btn_comprimir = ttk.Button(aba, text="🗜️ Comprimir",
+                                        command=self.comprimir_pdf_thread,
+                                        state="disabled",
+                                        style='Custom.TButton')
+        self.btn_comprimir.grid(row=6, column=0, columnspan=3, pady=30, ipadx=20, ipady=10)
+
+    def compress_selecionar_entrada(self):
+        arquivo = filedialog.askopenfilename(
+            title="Selecione o PDF para comprimir",
+            filetypes=[("Arquivo PDF", "*.pdf")]
+        )
+        if arquivo:
+            self.compress_arquivo_entrada.set(arquivo)
+            base, _ = os.path.splitext(arquivo)
+            self.compress_arquivo_saida.set(base + "_comprimido.pdf")
+            self._compress_atualizar_botao()
+
+    def compress_selecionar_saida(self):
+        arquivo = filedialog.asksaveasfilename(
+            title="Salvar PDF comprimido como",
+            defaultextension=".pdf",
+            filetypes=[("Arquivo PDF", "*.pdf")]
+        )
+        if arquivo:
+            self.compress_arquivo_saida.set(arquivo)
+            self._compress_atualizar_botao()
+
+    def _compress_atualizar_botao(self):
+        ok = bool(self.compress_arquivo_entrada.get() and self.compress_arquivo_saida.get())
+        self.btn_comprimir.config(state="normal" if ok else "disabled")
+
+    def comprimir_pdf_thread(self):
+        thread = threading.Thread(target=self.comprimir_pdf)
+        thread.daemon = True
+        thread.start()
+
+    def comprimir_pdf(self):
+        if not PDF2IMAGE_AVAILABLE:
+            messagebox.showerror("Erro",
+                "A biblioteca pdf2image não está disponível.\n"
+                "Instale com: pip install pdf2image")
+            return
+
+        niveis = {
+            "baixa": (200, 85),
+            "media": (150, 70),
+            "alta":  (100, 50),
+        }
+        dpi, qualidade = niveis[self.compress_nivel.get()]
+
+        try:
+            self.btn_comprimir.config(state="disabled")
+            arquivo_entrada = self.compress_arquivo_entrada.get()
+            arquivo_saida = self.compress_arquivo_saida.get()
+
+            self.compress_status_label.config(text="Convertendo páginas...")
+            self.compress_progress.config(value=0)
+            self.root.update_idletasks()
+
+            poppler_path = self._get_poppler_path()
+            kwargs = {'dpi': dpi}
+            if poppler_path:
+                kwargs['poppler_path'] = poppler_path
+
+            imagens_originais = convert_from_path(arquivo_entrada, **kwargs)
+            total = len(imagens_originais)
+
+            imagens_comprimidas = []
+            for i, img in enumerate(imagens_originais):
+                self.compress_status_label.config(
+                    text=f"Comprimindo página {i + 1} de {total}...")
+                self.compress_progress.config(value=int((i / total) * 90))
+                self.root.update_idletasks()
+
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=qualidade, optimize=True)
+                buf.seek(0)
+                imagens_comprimidas.append(Image.open(buf).copy())
+
+            self.compress_status_label.config(text="Salvando PDF comprimido...")
+            self.compress_progress.config(value=90)
+            self.root.update_idletasks()
+
+            imagens_comprimidas[0].save(
+                arquivo_saida,
+                save_all=True,
+                append_images=imagens_comprimidas[1:]
+            )
+
+            tamanho_original = os.path.getsize(arquivo_entrada) / 1024
+            tamanho_final = os.path.getsize(arquivo_saida) / 1024
+
+            if tamanho_final >= tamanho_original:
+                shutil.copy2(arquivo_entrada, arquivo_saida)
+                tamanho_final = tamanho_original
+                self.compress_progress.config(value=100)
+                self.compress_status_label.config(
+                    text=f"Arquivo já otimizado — cópia salva sem alteração ({tamanho_original:.0f} KB)")
+                messagebox.showinfo("Sem redução",
+                    f"O arquivo já está bem comprimido ou contém principalmente texto/vetores.\n"
+                    f"A compressão por imagem não reduziria o tamanho ({tamanho_original:.0f} KB).\n"
+                    f"O arquivo original foi copiado para: {arquivo_saida}")
+                return
+
+            reducao = (1 - tamanho_final / tamanho_original) * 100
+
+            self.compress_progress.config(value=100)
+            self.compress_status_label.config(
+                text=f"Concluído! {tamanho_original:.0f} KB → {tamanho_final:.0f} KB  ({reducao:.0f}% menor)")
+            messagebox.showinfo("Sucesso",
+                f"PDF comprimido com sucesso!\n"
+                f"Original: {tamanho_original:.0f} KB\n"
+                f"Comprimido: {tamanho_final:.0f} KB  ({reducao:.0f}% menor)\n"
+                f"Salvo em: {arquivo_saida}")
+
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao comprimir PDF: {str(e)}")
+            self.compress_status_label.config(text="Erro durante a compressão")
+
+        finally:
+            self._compress_atualizar_botao()
+            self.compress_progress.config(value=0)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('Juntador de PDFs.py', doraise=True\\); print\\('OK'\\)\")"
+    ]
+  }
+}
