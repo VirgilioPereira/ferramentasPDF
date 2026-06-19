@@ -21,6 +21,14 @@ try:
 except ImportError:
     PYTESSERACT_AVAILABLE = False
 
+try:
+    import pdfplumber
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    PDF_EXCEL_AVAILABLE = True
+except ImportError:
+    PDF_EXCEL_AVAILABLE = False
+
 
 class PDFMergerApp:
     def __init__(self, root):
@@ -43,6 +51,11 @@ class PDFMergerApp:
         self.compress_arquivo_entrada = tk.StringVar()
         self.compress_arquivo_saida = tk.StringVar()
         self.compress_nivel = tk.StringVar(value="media")
+
+        # Variáveis - PDF para Excel
+        self.excel_arquivo_entrada = tk.StringVar()
+        self.excel_arquivo_saida = tk.StringVar()
+        self.excel_modo = tk.StringVar(value="tabelas")
 
         self.configurar_estilo()
         self.criar_interface()
@@ -77,6 +90,7 @@ class PDFMergerApp:
         self.criar_aba_juntar()
         self.criar_aba_ocr()
         self.criar_aba_comprimir()
+        self.criar_aba_pdf_excel()
 
     # ── Aba: Juntar PDFs ────────────────────────────────────────────────────
 
@@ -509,6 +523,340 @@ class PDFMergerApp:
         finally:
             self._compress_atualizar_botao()
             self.compress_progress.config(value=0)
+
+    # ── Aba: PDF para Excel ─────────────────────────────────────────────────
+
+    def criar_aba_pdf_excel(self):
+        aba = ttk.Frame(self.notebook, padding="20")
+        self.notebook.add(aba, text="📊 PDF para Excel")
+
+        aba.columnconfigure(1, weight=1)
+
+        ttk.Label(aba, text="📊 PDF para Excel", style='Title.TLabel').grid(
+            row=0, column=0, columnspan=3, pady=(0, 20))
+
+        ttk.Label(aba, text="📄 PDF de entrada:", style='Heading.TLabel').grid(
+            row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(aba, textvariable=self.excel_arquivo_entrada, state="readonly", width=50).grid(
+            row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ttk.Button(aba, text="Procurar", command=self.excel_selecionar_entrada).grid(
+            row=1, column=2, pady=5)
+
+        ttk.Label(aba, text="💾 Salvar como:", style='Heading.TLabel').grid(
+            row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(aba, textvariable=self.excel_arquivo_saida, state="readonly", width=50).grid(
+            row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ttk.Button(aba, text="Procurar", command=self.excel_selecionar_saida).grid(
+            row=2, column=2, pady=5)
+
+        modo_frame = ttk.LabelFrame(aba, text="Modo de extração", padding="10")
+        modo_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(15, 5))
+
+        ttk.Radiobutton(
+            modo_frame,
+            text="Tabelas  (detecta e extrai tabelas estruturadas — ideal para PDFs com bordas)",
+            variable=self.excel_modo, value="tabelas"
+        ).grid(row=0, column=0, sticky=tk.W, pady=2)
+
+        ttk.Radiobutton(
+            modo_frame,
+            text="Todo o texto  (extrai linha por linha — ideal para PDFs sem tabelas definidas)",
+            variable=self.excel_modo, value="texto"
+        ).grid(row=1, column=0, sticky=tk.W, pady=2)
+
+        ttk.Label(aba,
+                  text="ℹ️  Requer: pip install pdfplumber openpyxl",
+                  foreground='#666666').grid(row=4, column=0, columnspan=3, pady=(10, 0))
+
+        self.excel_progress = ttk.Progressbar(aba, mode='determinate')
+        self.excel_progress.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+
+        self.excel_status_label = ttk.Label(aba, text="Selecione um PDF para converter em Excel")
+        self.excel_status_label.grid(row=6, column=0, columnspan=3, pady=5)
+
+        self.btn_excel = ttk.Button(aba, text="📊 Converter para Excel",
+                                    command=self.excel_converter_thread,
+                                    state="disabled",
+                                    style='Custom.TButton')
+        self.btn_excel.grid(row=7, column=0, columnspan=3, pady=30, ipadx=20, ipady=10)
+
+    def excel_selecionar_entrada(self):
+        arquivo = filedialog.askopenfilename(
+            title="Selecione o PDF para converter",
+            filetypes=[("Arquivo PDF", "*.pdf")]
+        )
+        if arquivo:
+            self.excel_arquivo_entrada.set(arquivo)
+            base, _ = os.path.splitext(arquivo)
+            if not self.excel_arquivo_saida.get():
+                self.excel_arquivo_saida.set(base + ".xlsx")
+            self._excel_atualizar_botao()
+
+    def excel_selecionar_saida(self):
+        arquivo = filedialog.asksaveasfilename(
+            title="Salvar Excel como",
+            defaultextension=".xlsx",
+            filetypes=[("Planilha Excel", "*.xlsx")]
+        )
+        if arquivo:
+            self.excel_arquivo_saida.set(arquivo)
+            self._excel_atualizar_botao()
+
+    def _excel_atualizar_botao(self):
+        ok = bool(self.excel_arquivo_entrada.get() and self.excel_arquivo_saida.get())
+        self.btn_excel.config(state="normal" if ok else "disabled")
+
+    def excel_converter_thread(self):
+        thread = threading.Thread(target=self.excel_converter)
+        thread.daemon = True
+        thread.start()
+
+    def _extrair_por_coordenadas(self, pagina):
+        """Extrai palavras agrupando por linha (Y) e separando colunas por gaps no eixo X.
+
+        Detecta posições fixas de colunas a partir das linhas com data para dividir
+        corretamente as linhas de continuação (ex: 'Negócios 988 BENEFICIÁRIO').
+        """
+        import re
+        DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}')
+
+        words = pagina.extract_words(x_tolerance=3, y_tolerance=3)
+        if not words:
+            return []
+
+        grupos = {}
+        for w in words:
+            y_key = None
+            for k in grupos:
+                if abs(k - w['top']) <= 5:
+                    y_key = k
+                    break
+            if y_key is None:
+                y_key = w['top']
+                grupos[y_key] = []
+            grupos[y_key].append(w)
+
+        # detecta onde as colunas começam nas linhas com data (gap > 10px entre grupos)
+        col_boundaries = []
+        for y in sorted(grupos.keys()):
+            ws_linha = sorted(grupos[y], key=lambda w: w['x0'])
+            if not DATE_RE.match(ws_linha[0]['text']):
+                continue
+            boundaries = []
+            prev_x1 = ws_linha[0]['x1']
+            for w in ws_linha[1:]:
+                if w['x0'] - prev_x1 > 10:
+                    boundaries.append(w['x0'])
+                prev_x1 = w['x1']
+            if boundaries:
+                col_boundaries.append(boundaries)
+
+        # média das posições de início de cada coluna
+        avg_boundaries = []
+        if col_boundaries:
+            max_cols = max(len(b) for b in col_boundaries)
+            for i in range(max_cols):
+                vals = [b[i] for b in col_boundaries if i < len(b)]
+                avg_boundaries.append(sum(vals) / len(vals))
+
+        resultado = []
+        for y in sorted(grupos.keys()):
+            ws_linha = sorted(grupos[y], key=lambda w: w['x0'])
+            colunas = []
+            texto_col = ws_linha[0]['text']
+            x_fim = ws_linha[0]['x1']
+
+            for w in ws_linha[1:]:
+                gap = w['x0'] - x_fim
+                near_boundary = any(abs(w['x0'] - b) < 5 for b in avg_boundaries)
+                if gap > 15 or (near_boundary and gap > 3):
+                    colunas.append(texto_col)
+                    texto_col = w['text']
+                else:
+                    texto_col += ' ' + w['text']
+                x_fim = w['x1']
+
+            colunas.append(texto_col)
+            resultado.append(colunas)
+
+        return resultado
+
+    def _mesclar_continuacoes(self, linhas):
+        """Mescla linhas de continuação na linha principal anterior.
+
+        Se o documento tiver datas (DD/MM/AAAA), usa esse padrão para identificar
+        linhas principais. Caso contrário, usa o máximo de colunas como referência.
+        """
+        import re
+        if not linhas:
+            return linhas
+
+        DATE_RE = re.compile(r'^\d{2}/\d{2}/\d{4}')
+        tem_datas = any(DATE_RE.match(str(l[0])) for l in linhas if l and l[0])
+
+        resultado = []
+        dentro_transacoes = False
+        n_colunas_principal = 0
+
+        if not tem_datas:
+            # sem datas: usa o máximo de colunas como limiar
+            esperado = max((len(l) for l in linhas if l), default=1)
+            limiar = max(2, round(esperado * 0.6))
+
+        for linha in linhas:
+            if not linha:
+                continue
+
+            col0 = str(linha[0]) if linha[0] else ''
+
+            if tem_datas:
+                if DATE_RE.match(col0):
+                    dentro_transacoes = True
+                    # separa a data do restante (Local) que vem colado na col 0
+                    data = col0[:10]
+                    local = col0[10:].strip()
+                    resto = [str(c) if c is not None else '' for c in linha[1:]]
+                    row = [data, local] + resto
+                    resultado.append(row)
+                    n_colunas_principal = max(n_colunas_principal, len(row))
+                elif dentro_transacoes and resultado:
+                    # linha de continuação: agrega ao Local (col 1) e complemento como col extra
+                    cont_local = col0
+                    cont_extra = str(linha[1]) if len(linha) > 1 and linha[1] else ''
+                    if cont_local:
+                        resultado[-1][1] = (resultado[-1][1] + ' ' + cont_local).strip()
+                    if cont_extra:
+                        while len(resultado[-1]) < n_colunas_principal + 1:
+                            resultado[-1].append('')
+                        idx = n_colunas_principal
+                        existing = resultado[-1][idx]
+                        resultado[-1][idx] = existing + (' | ' if existing else '') + cont_extra
+                else:
+                    # metadados pré-transação: inclui como está
+                    resultado.append([str(c) if c is not None else '' for c in linha])
+            else:
+                if len(linha) >= limiar or not resultado:
+                    resultado.append([str(c) if c is not None else '' for c in linha])
+                else:
+                    cont = ' '.join(str(c) for c in linha if c)
+                    if cont:
+                        resultado[-1][0] = resultado[-1][0] + ' ' + cont
+
+        return resultado
+
+    def _extrair_pagina_tabela(self, pagina):
+        """Tenta tabela estruturada; se dados ficarem numa só coluna, usa coordenadas."""
+        tabelas = pagina.extract_tables()
+        if tabelas:
+            linhas = [linha for tabela in tabelas for linha in tabela]
+            total = sum(len(r) for r in linhas)
+            nulos = sum(1 for r in linhas for c in r if c is None)
+            if total > 0 and nulos / total < 0.5:
+                return self._mesclar_continuacoes(linhas)
+
+        return self._mesclar_continuacoes(self._extrair_por_coordenadas(pagina))
+
+    def excel_converter(self):
+        if not PDF_EXCEL_AVAILABLE:
+            messagebox.showerror("Erro",
+                "As bibliotecas necessárias não estão instaladas.\n"
+                "Execute: pip install pdfplumber openpyxl")
+            return
+
+        try:
+            self.btn_excel.config(state="disabled")
+            self.excel_progress.config(value=0)
+            arquivo_entrada = self.excel_arquivo_entrada.get()
+            arquivo_saida = self.excel_arquivo_saida.get()
+            modo = self.excel_modo.get()
+
+            self.excel_status_label.config(text="Abrindo PDF...")
+            self.root.update_idletasks()
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Dados"
+
+            cabecalho_font = Font(bold=True, color="FFFFFF")
+            cabecalho_fill = PatternFill(fill_type="solid", fgColor="2C3E50")
+            centro = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            linha_atual = 1
+            linhas_escritas = 0
+            linha_cabecalho = None
+
+            with pdfplumber.open(arquivo_entrada) as pdf:
+                total = len(pdf.pages)
+
+                for i, pagina in enumerate(pdf.pages):
+                    self.excel_progress.config(value=int((i / total) * 95))
+                    self.excel_status_label.config(
+                        text=f"Processando página {i + 1} de {total}...")
+                    self.root.update_idletasks()
+
+                    if modo == "tabelas":
+                        linhas = self._extrair_pagina_tabela(pagina)
+                        for linha in linhas:
+                            celulas_com_valor = [c for c in linha if c and str(c).strip()]
+                            if not celulas_com_valor:
+                                continue
+                            # pula repetições do cabeçalho nas páginas seguintes
+                            if linha_cabecalho is not None and linha == linha_cabecalho:
+                                continue
+                            eh_cabecalho = linha_cabecalho is None
+                            if eh_cabecalho:
+                                linha_cabecalho = linha
+                            for c_idx, celula in enumerate(linha):
+                                valor = str(celula).strip() if celula is not None else ""
+                                cell = ws.cell(row=linha_atual, column=c_idx + 1, value=valor)
+                                if eh_cabecalho:
+                                    cell.font = cabecalho_font
+                                    cell.fill = cabecalho_fill
+                                    cell.alignment = centro
+                            linha_atual += 1
+                            linhas_escritas += 1
+
+                    else:
+                        texto = pagina.extract_text()
+                        if texto and texto.strip():
+                            for linha_txt in texto.splitlines():
+                                if linha_txt.strip():
+                                    ws.cell(row=linha_atual, column=1, value=linha_txt)
+                                    linha_atual += 1
+                                    linhas_escritas += 1
+
+            if linhas_escritas == 0:
+                messagebox.showwarning("Sem dados",
+                    "Nenhum dado foi encontrado no PDF com o modo selecionado.\n"
+                    "Tente o modo 'Todo o texto' se o PDF não tiver tabelas detectáveis.")
+                return
+
+            for col in ws.columns:
+                max_len = max(
+                    (len(str(c.value)) if c.value else 0 for c in col), default=0
+                )
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
+
+            self.excel_status_label.config(text="Salvando arquivo Excel...")
+            self.excel_progress.config(value=97)
+            self.root.update_idletasks()
+
+            wb.save(arquivo_saida)
+
+            self.excel_progress.config(value=100)
+            self.excel_status_label.config(text=f"Concluído! {linhas_escritas} linha(s) extraída(s).")
+            messagebox.showinfo("Sucesso",
+                f"Excel gerado com sucesso!\n"
+                f"Linhas extraídas: {linhas_escritas}\n"
+                f"Salvo em: {arquivo_saida}")
+
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao converter para Excel: {str(e)}")
+            self.excel_status_label.config(text="Erro durante a conversão")
+
+        finally:
+            self._excel_atualizar_botao()
+            self.excel_progress.config(value=0)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 

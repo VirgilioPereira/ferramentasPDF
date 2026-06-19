@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('Juntador de PDFs.py', doraise=True\\); print\\('OK'\\)\")"
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('Juntador de PDFs.py', doraise=True\\); print\\('OK'\\)\")",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"import pdfplumber; import openpyxl; print\\('OK'\\)\")",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe debug_coords.py 2>&1 | Select-Object -First 60)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe debug_test.py 2>&1 | Select-Object -First 50)"
     ]
   }
 }

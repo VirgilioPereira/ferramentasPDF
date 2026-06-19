@@ -1,0 +1,1 @@
+.venv\Scripts\python.exe -m PyInstaller --onefile --noconsole --add-data "poppler_bin;poppler_bin" "Juntador de PDFs.py"
