@@ -16,6 +16,12 @@ except ImportError:
     PDF2IMAGE_AVAILABLE = False
 
 try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+
+try:
     import pytesseract
     PYTESSERACT_AVAILABLE = True
 except ImportError:
@@ -42,6 +48,8 @@ class PDFMergerApp:
         self.arquivo_destino = tk.StringVar()
         self.arquivos_pdf = []
         self.preview_image = None
+        self.preview_token = 0
+        self.preview_cache = {}
 
         # Variáveis - OCR
         self.ocr_arquivo_entrada = tk.StringVar()
@@ -293,28 +301,30 @@ class PDFMergerApp:
         thread.daemon = True
         thread.start()
 
+    def _ocr_status(self, texto=None, valor=None):
+        self._status_ui(self.ocr_status_label, texto, self.ocr_progress, valor)
+
     def ocr_realizar(self):
         if not PDF2IMAGE_AVAILABLE:
-            messagebox.showerror("Erro",
+            self.root.after(0, lambda: messagebox.showerror("Erro",
                 "A biblioteca pdf2image não está disponível.\n"
-                "Instale com: pip install pdf2image")
+                "Instale com: pip install pdf2image"))
             return
 
         if not PYTESSERACT_AVAILABLE:
-            messagebox.showerror("Erro",
+            self.root.after(0, lambda: messagebox.showerror("Erro",
                 "A biblioteca pytesseract não está disponível.\n"
                 "Instale com: pip install pytesseract\n\n"
                 "Instale também o Tesseract OCR:\n"
-                "github.com/tesseract-ocr/tesseract")
+                "github.com/tesseract-ocr/tesseract"))
             return
 
         try:
-            self.btn_ocr.config(state="disabled")
+            self.root.after(0, lambda: self.btn_ocr.config(state="disabled"))
             arquivo_entrada = self.ocr_arquivo_entrada.get()
             arquivo_saida = self.ocr_arquivo_saida.get()
 
-            self.ocr_status_label.config(text="Convertendo PDF em imagens...")
-            self.root.update_idletasks()
+            self._ocr_status("Convertendo PDF em imagens...", 0)
 
             poppler_path = self._get_poppler_path()
             kwargs = {'dpi': 300}
@@ -326,17 +336,14 @@ class PDFMergerApp:
 
             pdf_pages = []
             for i, img in enumerate(images):
-                self.ocr_status_label.config(
-                    text=f"Processando página {i + 1} de {total_paginas}...")
-                self.ocr_progress.config(value=int((i / total_paginas) * 90))
-                self.root.update_idletasks()
+                self._ocr_status(
+                    f"Processando página {i + 1} de {total_paginas}...",
+                    int((i / total_paginas) * 90))
 
                 pdf_bytes = pytesseract.image_to_pdf_or_hocr(img, extension='pdf', lang='por')
                 pdf_pages.append(io.BytesIO(pdf_bytes))
 
-            self.ocr_status_label.config(text="Salvando PDF pesquisável...")
-            self.ocr_progress.config(value=90)
-            self.root.update_idletasks()
+            self._ocr_status("Salvando PDF pesquisável...", 90)
 
             merger = PdfMerger()
             for page in pdf_pages:
@@ -344,18 +351,17 @@ class PDFMergerApp:
             merger.write(arquivo_saida)
             merger.close()
 
-            self.ocr_progress.config(value=100)
-            self.ocr_status_label.config(text="PDF com OCR gerado com sucesso!")
-            messagebox.showinfo("Sucesso",
-                f"PDF pesquisável gerado com sucesso!\nArquivo salvo em: {arquivo_saida}")
+            self._ocr_status("PDF com OCR gerado com sucesso!", 100)
+            self.root.after(0, lambda: messagebox.showinfo("Sucesso",
+                f"PDF pesquisável gerado com sucesso!\nArquivo salvo em: {arquivo_saida}"))
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao realizar OCR: {str(e)}")
-            self.ocr_status_label.config(text="Erro durante o processo de OCR")
+            msg = str(e)
+            self._ocr_status("Erro durante o processo de OCR")
+            self.root.after(0, lambda: messagebox.showerror("Erro", f"Erro ao realizar OCR: {msg}"))
 
         finally:
-            self._ocr_atualizar_botao()
-            self.ocr_progress.config(value=0)
+            self.root.after(0, self._ocr_atualizar_botao)
 
     # ── Aba: Comprimir PDF ──────────────────────────────────────────────────
 
@@ -437,13 +443,29 @@ class PDFMergerApp:
         thread.daemon = True
         thread.start()
 
+    def _status_ui(self, label, texto=None, progress=None, valor=None):
+        """Atualiza um label de status e/ou progressbar na thread da UI (thread-safe).
+        Use a partir de threads de trabalho — Tkinter não pode ser tocado fora da
+        thread principal."""
+        def upd():
+            if texto is not None:
+                label.config(text=texto)
+            if progress is not None and valor is not None:
+                progress.config(value=valor)
+        self.root.after(0, upd)
+
+    def _compress_status(self, texto=None, valor=None):
+        """Atualiza status/progresso da compressão na thread da UI (thread-safe)."""
+        self._status_ui(self.compress_status_label, texto, self.compress_progress, valor)
+
     def comprimir_pdf(self):
-        if not PDF2IMAGE_AVAILABLE:
-            messagebox.showerror("Erro",
-                "A biblioteca pdf2image não está disponível.\n"
-                "Instale com: pip install pdf2image")
+        if not PYMUPDF_AVAILABLE and not PDF2IMAGE_AVAILABLE:
+            self.root.after(0, lambda: messagebox.showerror("Erro",
+                "Nenhuma biblioteca de compressão disponível.\n"
+                "Instale com: pip install PyMuPDF"))
             return
 
+        # (dpi de rasterização para PDFs de imagem, qualidade JPEG)
         niveis = {
             "baixa": (200, 85),
             "media": (150, 70),
@@ -452,43 +474,29 @@ class PDFMergerApp:
         dpi, qualidade = niveis[self.compress_nivel.get()]
 
         try:
-            self.btn_comprimir.config(state="disabled")
+            self.root.after(0, lambda: self.btn_comprimir.config(state="disabled"))
             arquivo_entrada = self.compress_arquivo_entrada.get()
             arquivo_saida = self.compress_arquivo_saida.get()
 
-            self.compress_status_label.config(text="Convertendo páginas...")
-            self.compress_progress.config(value=0)
-            self.root.update_idletasks()
+            self._compress_status("Analisando o PDF...", 0)
 
-            poppler_path = self._get_poppler_path()
-            kwargs = {'dpi': dpi}
-            if poppler_path:
-                kwargs['poppler_path'] = poppler_path
+            # Decide a estratégia: PDF escaneado (imagem) vs texto/vetor
+            eh_imagem = False
+            if PYMUPDF_AVAILABLE:
+                doc = fitz.open(arquivo_entrada)
+                try:
+                    eh_imagem = self._pdf_eh_imagem(doc)
+                finally:
+                    doc.close()
 
-            imagens_originais = convert_from_path(arquivo_entrada, **kwargs)
-            total = len(imagens_originais)
-
-            imagens_comprimidas = []
-            for i, img in enumerate(imagens_originais):
-                self.compress_status_label.config(
-                    text=f"Comprimindo página {i + 1} de {total}...")
-                self.compress_progress.config(value=int((i / total) * 90))
-                self.root.update_idletasks()
-
-                buf = io.BytesIO()
-                img.convert("RGB").save(buf, format="JPEG", quality=qualidade, optimize=True)
-                buf.seek(0)
-                imagens_comprimidas.append(Image.open(buf).copy())
-
-            self.compress_status_label.config(text="Salvando PDF comprimido...")
-            self.compress_progress.config(value=90)
-            self.root.update_idletasks()
-
-            imagens_comprimidas[0].save(
-                arquivo_saida,
-                save_all=True,
-                append_images=imagens_comprimidas[1:]
-            )
+            if eh_imagem and PDF2IMAGE_AVAILABLE:
+                self._comprimir_por_imagem(arquivo_entrada, arquivo_saida, dpi, qualidade)
+            elif PYMUPDF_AVAILABLE:
+                # PDF de texto/vetor: compressão sem perda (deflate + subset de fontes)
+                max_dim = int(dpi * 8.27)  # limite ~ página A4 no DPI escolhido
+                self._comprimir_texto(arquivo_entrada, arquivo_saida, qualidade, max_dim)
+            else:
+                self._comprimir_por_imagem(arquivo_entrada, arquivo_saida, dpi, qualidade)
 
             tamanho_original = os.path.getsize(arquivo_entrada) / 1024
             tamanho_final = os.path.getsize(arquivo_saida) / 1024
@@ -496,33 +504,136 @@ class PDFMergerApp:
             if tamanho_final >= tamanho_original:
                 shutil.copy2(arquivo_entrada, arquivo_saida)
                 tamanho_final = tamanho_original
-                self.compress_progress.config(value=100)
-                self.compress_status_label.config(
-                    text=f"Arquivo já otimizado — cópia salva sem alteração ({tamanho_original:.0f} KB)")
-                messagebox.showinfo("Sem redução",
-                    f"O arquivo já está bem comprimido ou contém principalmente texto/vetores.\n"
-                    f"A compressão por imagem não reduziria o tamanho ({tamanho_original:.0f} KB).\n"
-                    f"O arquivo original foi copiado para: {arquivo_saida}")
+                self._compress_status(
+                    f"Arquivo já otimizado — cópia salva sem alteração ({tamanho_original:.0f} KB)", 100)
+                self.root.after(0, lambda: messagebox.showinfo("Sem redução",
+                    f"O arquivo já está no menor tamanho possível com este método.\n"
+                    f"O original foi copiado para: {arquivo_saida}"))
                 return
 
             reducao = (1 - tamanho_final / tamanho_original) * 100
 
-            self.compress_progress.config(value=100)
-            self.compress_status_label.config(
-                text=f"Concluído! {tamanho_original:.0f} KB → {tamanho_final:.0f} KB  ({reducao:.0f}% menor)")
-            messagebox.showinfo("Sucesso",
+            self._compress_status(
+                f"Concluído! {tamanho_original:.0f} KB → {tamanho_final:.0f} KB  ({reducao:.0f}% menor)", 100)
+            self.root.after(0, lambda: messagebox.showinfo("Sucesso",
                 f"PDF comprimido com sucesso!\n"
                 f"Original: {tamanho_original:.0f} KB\n"
                 f"Comprimido: {tamanho_final:.0f} KB  ({reducao:.0f}% menor)\n"
-                f"Salvo em: {arquivo_saida}")
+                f"Salvo em: {arquivo_saida}"))
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao comprimir PDF: {str(e)}")
-            self.compress_status_label.config(text="Erro durante a compressão")
+            msg = str(e)
+            self._compress_status("Erro durante a compressão")
+            self.root.after(0, lambda: messagebox.showerror("Erro", f"Erro ao comprimir PDF: {msg}"))
 
         finally:
-            self._compress_atualizar_botao()
-            self.compress_progress.config(value=0)
+            self.root.after(0, self._compress_atualizar_botao)
+
+    def _pdf_eh_imagem(self, doc):
+        """Heurística: True se a maioria das páginas tem pouco/nenhum texto (PDF escaneado)."""
+        paginas = len(doc)
+        if paginas == 0:
+            return False
+        amostra = min(paginas, 10)
+        com_texto = 0
+        for i in range(amostra):
+            try:
+                if len(doc[i].get_text("text").strip()) > 50:
+                    com_texto += 1
+            except Exception:
+                pass
+        return com_texto < (amostra / 2)
+
+    def _comprimir_texto(self, entrada, saida, qualidade, max_dim):
+        """Compressão sem perda para PDFs de texto/vetor: recomprime imagens
+        embutidas (best-effort), faz subset de fontes e regrava com deflate."""
+        doc = fitz.open(entrada)
+        try:
+            self._compress_status("Otimizando imagens embutidas...", 30)
+            self._recomprimir_imagens(doc, qualidade, max_dim)
+
+            self._compress_status("Reduzindo fontes incorporadas...", 60)
+            try:
+                doc.subset_fonts()
+            except Exception:
+                pass  # subset não é suportado em todos os PDFs; segue sem ele
+
+            self._compress_status("Salvando PDF comprimido...", 85)
+            doc.save(saida, garbage=4, deflate=True, deflate_images=True,
+                     deflate_fonts=True, clean=True)
+        finally:
+            doc.close()
+
+    def _recomprimir_imagens(self, doc, qualidade, max_dim):
+        """Recomprime/reduz imagens raster embutidas, preservando o texto vetorial.
+        Best-effort: só substitui quando o resultado for menor, ignora imagens
+        com transparência para não corromper o documento."""
+        vistos = set()
+        for page in doc:
+            for img in page.get_images(full=True):
+                xref = img[0]
+                if xref in vistos:
+                    continue
+                vistos.add(xref)
+                try:
+                    base = doc.extract_image(xref)
+                except Exception:
+                    continue
+                if base.get("smask", 0):
+                    continue  # imagem com máscara/transparência — não mexe
+                img_bytes = base.get("image", b"")
+                if len(img_bytes) < 8 * 1024:
+                    continue  # muito pequena, não compensa
+                try:
+                    pil = Image.open(io.BytesIO(img_bytes))
+                    pil.load()
+                    if pil.mode != "RGB":
+                        pil = pil.convert("RGB")
+                    if max(pil.size) > max_dim:
+                        ratio = max_dim / max(pil.size)
+                        pil = pil.resize(
+                            (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio))),
+                            Image.Resampling.LANCZOS)
+                    buf = io.BytesIO()
+                    pil.save(buf, format="JPEG", quality=qualidade, optimize=True)
+                    novo = buf.getvalue()
+                except Exception:
+                    continue
+                if len(novo) < len(img_bytes):
+                    try:
+                        page.replace_image(xref, stream=novo)
+                    except Exception:
+                        continue
+
+    def _comprimir_por_imagem(self, arquivo_entrada, arquivo_saida, dpi, qualidade):
+        """Rasteriza cada página em JPEG. Ideal para PDFs escaneados (imagem)."""
+        poppler_path = self._get_poppler_path()
+        kwargs = {'dpi': dpi}
+        if poppler_path:
+            kwargs['poppler_path'] = poppler_path
+
+        self._compress_status("Convertendo páginas...")
+
+        imagens_originais = convert_from_path(arquivo_entrada, **kwargs)
+        total = len(imagens_originais)
+
+        imagens_comprimidas = []
+        for i, img in enumerate(imagens_originais):
+            self._compress_status(
+                f"Comprimindo página {i + 1} de {total}...", int((i / total) * 90))
+
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=qualidade, optimize=True)
+            buf.seek(0)
+            imagens_comprimidas.append(Image.open(buf).copy())
+
+        self._compress_status("Salvando PDF comprimido...", 90)
+
+        imagens_comprimidas[0].save(
+            arquivo_saida,
+            save_all=True,
+            append_images=imagens_comprimidas[1:]
+        )
 
     # ── Aba: PDF para Excel ─────────────────────────────────────────────────
 
@@ -588,8 +699,7 @@ class PDFMergerApp:
         if arquivo:
             self.excel_arquivo_entrada.set(arquivo)
             base, _ = os.path.splitext(arquivo)
-            if not self.excel_arquivo_saida.get():
-                self.excel_arquivo_saida.set(base + ".xlsx")
+            self.excel_arquivo_saida.set(base + ".xlsx")
             self._excel_atualizar_botao()
 
     def excel_selecionar_saida(self):
@@ -749,29 +859,31 @@ class PDFMergerApp:
         tabelas = pagina.extract_tables()
         if tabelas:
             linhas = [linha for tabela in tabelas for linha in tabela]
+            n_colunas = max((len(r) for r in linhas), default=0)
             total = sum(len(r) for r in linhas)
             nulos = sum(1 for r in linhas for c in r if c is None)
-            if total > 0 and nulos / total < 0.5:
+            if n_colunas > 1 and total > 0 and nulos / total < 0.5:
                 return self._mesclar_continuacoes(linhas)
 
         return self._mesclar_continuacoes(self._extrair_por_coordenadas(pagina))
 
+    def _excel_status(self, texto=None, valor=None):
+        self._status_ui(self.excel_status_label, texto, self.excel_progress, valor)
+
     def excel_converter(self):
         if not PDF_EXCEL_AVAILABLE:
-            messagebox.showerror("Erro",
+            self.root.after(0, lambda: messagebox.showerror("Erro",
                 "As bibliotecas necessárias não estão instaladas.\n"
-                "Execute: pip install pdfplumber openpyxl")
+                "Execute: pip install pdfplumber openpyxl"))
             return
 
         try:
-            self.btn_excel.config(state="disabled")
-            self.excel_progress.config(value=0)
+            self.root.after(0, lambda: self.btn_excel.config(state="disabled"))
             arquivo_entrada = self.excel_arquivo_entrada.get()
             arquivo_saida = self.excel_arquivo_saida.get()
             modo = self.excel_modo.get()
 
-            self.excel_status_label.config(text="Abrindo PDF...")
-            self.root.update_idletasks()
+            self._excel_status("Abrindo PDF...", 0)
 
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -789,10 +901,8 @@ class PDFMergerApp:
                 total = len(pdf.pages)
 
                 for i, pagina in enumerate(pdf.pages):
-                    self.excel_progress.config(value=int((i / total) * 95))
-                    self.excel_status_label.config(
-                        text=f"Processando página {i + 1} de {total}...")
-                    self.root.update_idletasks()
+                    self._excel_status(
+                        f"Processando página {i + 1} de {total}...", int((i / total) * 95))
 
                     if modo == "tabelas":
                         linhas = self._extrair_pagina_tabela(pagina)
@@ -826,9 +936,10 @@ class PDFMergerApp:
                                     linhas_escritas += 1
 
             if linhas_escritas == 0:
-                messagebox.showwarning("Sem dados",
+                self._excel_status("Nenhum dado encontrado")
+                self.root.after(0, lambda: messagebox.showwarning("Sem dados",
                     "Nenhum dado foi encontrado no PDF com o modo selecionado.\n"
-                    "Tente o modo 'Todo o texto' se o PDF não tiver tabelas detectáveis.")
+                    "Tente o modo 'Todo o texto' se o PDF não tiver tabelas detectáveis."))
                 return
 
             for col in ws.columns:
@@ -837,26 +948,23 @@ class PDFMergerApp:
                 )
                 ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
 
-            self.excel_status_label.config(text="Salvando arquivo Excel...")
-            self.excel_progress.config(value=97)
-            self.root.update_idletasks()
+            self._excel_status("Salvando arquivo Excel...", 97)
 
             wb.save(arquivo_saida)
 
-            self.excel_progress.config(value=100)
-            self.excel_status_label.config(text=f"Concluído! {linhas_escritas} linha(s) extraída(s).")
-            messagebox.showinfo("Sucesso",
+            self._excel_status(f"Concluído! {linhas_escritas} linha(s) extraída(s).", 100)
+            self.root.after(0, lambda: messagebox.showinfo("Sucesso",
                 f"Excel gerado com sucesso!\n"
                 f"Linhas extraídas: {linhas_escritas}\n"
-                f"Salvo em: {arquivo_saida}")
+                f"Salvo em: {arquivo_saida}"))
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao converter para Excel: {str(e)}")
-            self.excel_status_label.config(text="Erro durante a conversão")
+            msg = str(e)
+            self._excel_status("Erro durante a conversão")
+            self.root.after(0, lambda: messagebox.showerror("Erro", f"Erro ao converter para Excel: {msg}"))
 
         finally:
-            self._excel_atualizar_botao()
-            self.excel_progress.config(value=0)
+            self.root.after(0, self._excel_atualizar_botao)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -1017,54 +1125,89 @@ class PDFMergerApp:
         indice = selecionados[0]
         arquivo = self.arquivos_pdf[indice]
 
-        try:
-            self.preview_info.config(text=f"Carregando pré-visualização de: {arquivo['nome']}")
-            self.root.update_idletasks()
+        # Cada chamada recebe um token; resultados antigos (cliques rápidos) são descartados
+        self.preview_token += 1
+        token = self.preview_token
 
+        # Se já temos a imagem em cache, exibe imediatamente
+        cache_key = arquivo['caminho']
+        if cache_key in self.preview_cache:
+            self._exibir_preview(self.preview_cache[cache_key], arquivo['nome'])
+            return
+
+        self.preview_info.config(text=f"Carregando pré-visualização de: {arquivo['nome']}")
+
+        thread = threading.Thread(
+            target=self._render_preview_thread,
+            args=(arquivo['caminho'], arquivo['nome'], token),
+            daemon=True
+        )
+        thread.start()
+
+    def _render_preview_thread(self, caminho, nome, token):
+        try:
             poppler_path = self._get_poppler_path()
-            kwargs = {'first_page': 1, 'last_page': 1, 'dpi': 150}
+            kwargs = {'first_page': 1, 'last_page': 1, 'dpi': 100}
             if poppler_path:
                 kwargs['poppler_path'] = poppler_path
 
-            images = convert_from_path(arquivo['caminho'], **kwargs)
+            images = convert_from_path(caminho, **kwargs)
+            img = images[0] if images else None
 
-            if images:
-                img = images[0]
-                canvas_width = self.preview_canvas.winfo_width()
-                canvas_height = self.preview_canvas.winfo_height()
-
-                if canvas_width > 1 and canvas_height > 1:
-                    img_ratio = img.width / img.height
-                    canvas_ratio = canvas_width / canvas_height
-
-                    if img_ratio > canvas_ratio:
-                        new_width = min(canvas_width - 20, img.width)
-                        new_height = int(new_width / img_ratio)
-                    else:
-                        new_height = min(canvas_height - 20, img.height)
-                        new_width = int(new_height * img_ratio)
-
-                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-                self.preview_image = ImageTk.PhotoImage(img)
-
-                self.preview_canvas.delete("all")
-                self.preview_canvas.create_image(
-                    self.preview_canvas.winfo_width() // 2,
-                    self.preview_canvas.winfo_height() // 2,
-                    image=self.preview_image,
-                    anchor=tk.CENTER
-                )
-                self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
-                self.preview_info.config(text=f"Pré-visualização: {arquivo['nome']}")
-            else:
-                self.preview_info.config(text="Erro ao carregar pré-visualização")
-
+            # Volta para a thread da UI para atualizar o canvas
+            self.root.after(0, lambda: self._preview_concluido(img, caminho, nome, token))
         except Exception as e:
-            self.preview_info.config(text=f"Erro na pré-visualização: {str(e)}")
-            self.limpar_preview()
+            self.root.after(0, lambda: self._preview_erro(str(e), token))
+
+    def _preview_concluido(self, img, caminho, nome, token):
+        # Ignora resultados de seleções já substituídas
+        if token != self.preview_token:
+            return
+
+        if img is None:
+            self.preview_info.config(text="Erro ao carregar pré-visualização")
+            return
+
+        self.preview_cache[caminho] = img
+        self._exibir_preview(img, nome)
+
+    def _preview_erro(self, msg, token):
+        if token != self.preview_token:
+            return
+        self.preview_info.config(text=f"Erro na pré-visualização: {msg}")
+        self.limpar_preview()
+
+    def _exibir_preview(self, img, nome):
+        canvas_width = self.preview_canvas.winfo_width()
+        canvas_height = self.preview_canvas.winfo_height()
+
+        if canvas_width > 1 and canvas_height > 1:
+            img_ratio = img.width / img.height
+            canvas_ratio = canvas_width / canvas_height
+
+            if img_ratio > canvas_ratio:
+                new_width = min(canvas_width - 20, img.width)
+                new_height = int(new_width / img_ratio)
+            else:
+                new_height = min(canvas_height - 20, img.height)
+                new_width = int(new_height * img_ratio)
+
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        self.preview_image = ImageTk.PhotoImage(img)
+
+        self.preview_canvas.delete("all")
+        self.preview_canvas.create_image(
+            self.preview_canvas.winfo_width() // 2,
+            self.preview_canvas.winfo_height() // 2,
+            image=self.preview_image,
+            anchor=tk.CENTER
+        )
+        self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
+        self.preview_info.config(text=f"Pré-visualização: {nome}")
 
     def limpar_preview(self):
+        self.preview_token += 1  # descarta qualquer render em andamento
         self.preview_canvas.delete("all")
         self.preview_image = None
         self.preview_info.config(text="Selecione um arquivo para ver a pré-visualização")
@@ -1080,10 +1223,13 @@ class PDFMergerApp:
         thread.daemon = True
         thread.start()
 
+    def _juntar_status(self, texto=None, valor=None):
+        self._status_ui(self.status_label, texto, self.progress, valor)
+
     def juntar_pdfs(self):
         try:
-            self.btn_juntar.config(state="disabled")
-            self.status_label.config(text="Juntando PDFs...")
+            self.root.after(0, lambda: self.btn_juntar.config(state="disabled"))
+            self._juntar_status("Juntando PDFs...", 0)
 
             arquivo_destino = self.arquivo_destino.get()
             total_arquivos = len(self.arquivos_pdf)
@@ -1094,29 +1240,28 @@ class PDFMergerApp:
                 try:
                     merger.append(arquivo_info['caminho'])
                     progresso = int((i + 1) / total_arquivos * 100)
-                    self.progress.config(value=progresso)
-                    self.status_label.config(text=f"Processando: {arquivo_info['nome']}")
-                    self.root.update_idletasks()
+                    self._juntar_status(f"Processando: {arquivo_info['nome']}", progresso)
                 except Exception as e:
-                    messagebox.showwarning("Aviso", f"Erro ao processar {arquivo_info['nome']}: {str(e)}")
+                    nome, msg = arquivo_info['nome'], str(e)
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        "Aviso", f"Erro ao processar {nome}: {msg}"))
                     continue
 
-            self.status_label.config(text="Salvando arquivo final...")
+            self._juntar_status("Salvando arquivo final...")
             merger.write(arquivo_destino)
             merger.close()
 
-            self.progress.config(value=100)
-            self.status_label.config(text="PDFs unidos com sucesso!")
-            messagebox.showinfo("Sucesso",
-                f"PDFs unidos com sucesso!\nArquivo salvo em: {arquivo_destino}")
+            self._juntar_status("PDFs unidos com sucesso!", 100)
+            self.root.after(0, lambda: messagebox.showinfo("Sucesso",
+                f"PDFs unidos com sucesso!\nArquivo salvo em: {arquivo_destino}"))
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao juntar PDFs: {str(e)}")
-            self.status_label.config(text="Erro durante o processo")
+            msg = str(e)
+            self._juntar_status("Erro durante o processo")
+            self.root.after(0, lambda: messagebox.showerror("Erro", f"Erro ao juntar PDFs: {msg}"))
 
         finally:
-            self.btn_juntar.config(state="normal")
-            self.progress.config(value=0)
+            self.root.after(0, lambda: self.btn_juntar.config(state="normal"))
 
 
 def main():

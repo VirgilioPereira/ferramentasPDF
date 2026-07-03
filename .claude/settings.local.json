@@ -4,7 +4,23 @@
       "Bash(.venv\\\\Scripts\\\\python.exe -c \"import py_compile; py_compile.compile\\('Juntador de PDFs.py', doraise=True\\); print\\('OK'\\)\")",
       "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"import pdfplumber; import openpyxl; print\\('OK'\\)\")",
       "PowerShell(.venv\\\\Scripts\\\\python.exe debug_coords.py 2>&1 | Select-Object -First 60)",
-      "PowerShell(.venv\\\\Scripts\\\\python.exe debug_test.py 2>&1 | Select-Object -First 50)"
+      "PowerShell(.venv\\\\Scripts\\\\python.exe debug_test.py 2>&1 | Select-Object -First 50)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m py_compile \"Juntador de PDFs.py\"; if \\($?\\) { \"OK - compilou sem erros\" })",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"import pikepdf; print\\('pikepdf', pikepdf.__version__\\)\" 2>&1; .venv\\\\Scripts\\\\python.exe -c \"import fitz; print\\('pymupdf', fitz.__version__\\)\" 2>&1; \\(Get-Command gswin64c -ErrorAction SilentlyContinue\\).Source; \\(Get-Command gswin32c -ErrorAction SilentlyContinue\\).Source)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m pip install PyMuPDF 2>&1 | Select-Object -Last 5)",
+      "Bash(cat)",
+      "Bash(.venv/Scripts/python.exe \"/c/Users/VIRGIL~1.PER/AppData/Local/Temp/claude/C--Users-Virgilio-Pereira-Documents-1-Desenvolvimento-ferramentasPDF/ab80343e-3930-4c72-af17-61cc535dfbe8/scratchpad/test_compress.py\")",
+      "Bash(.venv/Scripts/python.exe \"/c/Users/VIRGIL~1.PER/AppData/Local/Temp/claude/C--Users-Virgilio-Pereira-Documents-1-Desenvolvimento-ferramentasPDF/ab80343e-3930-4c72-af17-61cc535dfbe8/scratchpad/test_texto_puro.py\")",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m py_compile \"Juntador de PDFs.py\"; if \\($?\\) { \"OK - compilou\" })",
+      "Bash(.venv/Scripts/python.exe \"/c/Users/VIRGIL~1.PER/AppData/Local/Temp/claude/C--Users-Virgilio-Pereira-Documents-1-Desenvolvimento-ferramentasPDF/ab80343e-3930-4c72-af17-61cc535dfbe8/scratchpad/test2.py\")",
+      "Read(//c/Users/VIRGIL~1.PER/AppData/Local/Temp/claude/C--Users-Virgilio-Pereira-Documents-1-Desenvolvimento-ferramentasPDF/ab80343e-3930-4c72-af17-61cc535dfbe8/scratchpad/**)",
+      "Bash(timeout 30 C:/Users/Virgilio.Pereira/Documents/1-Desenvolvimento/ferramentasPDF/.venv/Scripts/python.exe -c ' *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(timeout 60 \"C:/Users/Virgilio.Pereira/Documents/1-Desenvolvimento/ferramentasPDF/.venv/Scripts/python.exe\" test3.py)",
+      "Bash(timeout 60 C:/Users/Virgilio.Pereira/Documents/1-Desenvolvimento/ferramentasPDF/.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c \"import pdfplumber; print\\('ok'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(git add *)"
     ]
   }
 }

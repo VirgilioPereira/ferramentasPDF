@@ -1,0 +1,1 @@
+.venv\Scripts\python.exe "Juntador de PDFs.py"
